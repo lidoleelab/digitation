@@ -1,0 +1,213 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width,initial-scale=1" />
+  <title>400 Tiles</title>
+
+  <style>
+    :root{
+      --bg: #f5f5f5;
+      --max: 960px;
+    }
+
+    html, body{
+      margin: 0;
+      height: 100%;
+      background: var(--bg);
+    }
+
+    body{
+      display: grid;
+      place-items: center;
+    }
+
+    .wrap{
+      width: min(var(--max), 100vw);
+    }
+
+    .grid{
+      display: grid;
+      grid-template-columns: repeat(20, 1fr); /* 20 × 20 */
+      gap: 0;
+    }
+
+    button.tile{
+      appearance: none;
+      border: none;
+      padding: 0;
+      margin: 0;
+      aspect-ratio: 1 / 1;
+      cursor: pointer;
+      border-radius: 0;
+      box-shadow: none;
+      background: #777; /* JS에서 덮어씀 */
+    }
+
+    button.tile:focus-visible{
+      outline: 1px solid rgba(0,0,0,0.25);
+      outline-offset: -1px;
+    }
+
+    @media (max-width: 600px){
+      .wrap{ width: 100vw; }
+    }
+  </style>
+</head>
+
+<body>
+  <div class="wrap">
+    <div class="grid" id="grid" aria-label="400 tiles"></div>
+  </div>
+
+<script>
+(() => {
+  /* =========================
+     CONFIG
+  ========================== */
+  const TILES = 400;
+  const COLS = 20;
+
+  const AUDIO_FILES = Array.from({ length: TILES }, (_, i) => {
+    const n = String(i + 1).padStart(3, "0"); // 001 ~ 400
+    return `audio/${n}.mp3`;
+  });
+
+  /* =========================
+     UTILS
+  ========================== */
+  function shuffle(arr){
+    for (let i = arr.length - 1; i > 0; i--){
+      const j = Math.floor(Math.random() * (i + 1));
+      [arr[i], arr[j]] = [arr[j], arr[i]];
+    }
+    return arr;
+  }
+
+  // ✅ 클릭 전: 흰색/near-white 제거된 그레이 분포
+  function grayScaleValues(){
+    const MIN = 8;      // 거의 검정
+    const MAX = 200;    // near-white 제거 핵심값
+    const step = (MAX - MIN) / (TILES - 1);
+    const minDistance = 2; // 400개에 적절한 간격
+
+    const values = [];
+
+    for (let i = 0; i < TILES; i++){
+      const base = MIN + i * step;
+      let g, tries = 0;
+
+      do {
+        const jitter = (Math.random() - 0.5) * step;
+        g = Math.round(base + jitter);
+        g = Math.max(MIN, Math.min(MAX, g));
+        tries++;
+        if (tries > 20) break;
+      } while (values.some(v => Math.abs(v - g) < minDistance));
+
+      values.push(g);
+    }
+    return shuffle(values);
+  }
+
+  function grayToHex(g){
+    const v = Math.max(1, Math.min(200, g))
+      .toString(16).padStart(2, "0");
+    return `#${v}${v}${v}`;
+  }
+
+  /* =========================
+     AUDIO
+  ========================== */
+  let audioCtx = null;
+  let currentSource = null;
+  const bufferCache = new Map();
+  let pool = [];
+
+  function ensureCtx(){
+    if (!audioCtx){
+      audioCtx = new (window.AudioContext || window.webkitAudioContext)();
+    }
+    return audioCtx;
+  }
+
+  async function loadBuffer(url){
+    if (bufferCache.has(url)) return bufferCache.get(url);
+    const ctx = ensureCtx();
+    const res = await fetch(url);
+    const arr = await res.arrayBuffer();
+    const buf = await ctx.decodeAudioData(arr);
+    bufferCache.set(url, buf);
+    return buf;
+  }
+
+  function stopAudio(){
+    if (currentSource){
+      try { currentSource.stop(); } catch {}
+      try { currentSource.disconnect(); } catch {}
+      currentSource = null;
+    }
+  }
+
+  function pickAudio(){
+    if (pool.length === 0) return null;
+    const idx = Math.floor(Math.random() * pool.length);
+    const [url] = pool.splice(idx, 1);
+    return url;
+  }
+
+  /* =========================
+     RENDER
+  ========================== */
+  const grid = document.getElementById("grid");
+
+  function render(){
+    grid.innerHTML = "";
+    grid.style.gridTemplateColumns = `repeat(${COLS}, 1fr)`;
+
+    const grays = grayScaleValues();
+
+    for (let i = 0; i < TILES; i++){
+      const btn = document.createElement("button");
+      btn.className = "tile";
+
+      const baseGray = grays[i];
+      btn.style.backgroundColor = grayToHex(baseGray);
+
+      let activated = false;
+
+      btn.addEventListener("click", async () => {
+        if (activated) return;
+        activated = true;
+
+        const ctx = ensureCtx();
+        if (ctx.state === "suspended") await ctx.resume();
+
+        // 클릭 후: 완전한 흰색
+        btn.style.backgroundColor = "#ffffff";
+
+        const url = pickAudio();
+        if (!url) return;
+
+        stopAudio();
+        const buf = await loadBuffer(url);
+        const src = ctx.createBufferSource();
+        src.buffer = buf;
+        src.connect(ctx.destination);
+        src.start();
+        currentSource = src;
+      });
+
+      grid.appendChild(btn);
+    }
+  }
+
+  /* =========================
+     INIT
+  ========================== */
+  pool = [...AUDIO_FILES];
+  render();
+})();
+</script>
+</body>
+</html>
